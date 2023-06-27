@@ -14,6 +14,23 @@ The code in this repo is a stand alone code used in the [ADIOS2 example](https:/
 
 ## Running the code
 
+The code requires Kokkos and MPI. Optionally adios2 can be used for writing and reading the output of the simulation.
+
+To compile the code without adios2 (using POSIX for writing/reading):
+```
+ cmake -DKokkos_ROOT=path/to/Kokkos/install -D CMAKE_CXX_STANDARD=17 -D CMAKE_CXX_EXTENSIONS=OFF -DCMAKE_CXX_COMPILER=${CXX_compiler}  -DCMAKE_C_COMPILER=gcc ..
+```
+To link to adios2 the parth to the install path must be provided:
+```
+-Dadios2_ROOT=/path/to/adios/install
+```
+The CXX compiler needs to point to the nvcc_wrapper when running on CUDA architecture:
+`/path/to/kokkos/bin/nvcc_wrapper`.
+
+### Running the plot scripts
+
+When adios2 is used for I/O the plot and simulation can run in parallel and stream data between each other.
+
 ## Configurations
 
 Flower-pattern: F=0.055 ; k=0.062
