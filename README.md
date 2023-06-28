@@ -29,7 +29,20 @@ The CXX compiler needs to point to the nvcc_wrapper when running on CUDA archite
 
 ### Running the plot scripts
 
+Running the code:
+```
+mpirun -n 2 ./bin/adios2-gray-scott-kokkos ../gs-settings.json
+
+```
+Running the plot function:
+```
+python ../source/cpp/gray-scott/plot/gsplot.py gs.bp/
+```
+
 When adios2 is used for I/O the plot and simulation can run in parallel and stream data between each other.
+```
+mpirun -n 2 ./bin/adios2-gray-scott-kokkos ../gs-settings.json & python ../source/cpp/gray-scott/plot/gsplot.py gs.bp/
+```
 
 ## Configurations
 
