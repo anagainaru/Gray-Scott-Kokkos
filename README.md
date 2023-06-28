@@ -27,21 +27,23 @@ To link to adios2 the parth to the install path must be provided:
 The CXX compiler needs to point to the nvcc_wrapper when running on CUDA architecture:
 `/path/to/kokkos/bin/nvcc_wrapper`.
 
-### Running the plot scripts
-
 Running the code:
 ```
 mpirun -n 2 ./bin/adios2-gray-scott-kokkos ../gs-settings.json
 
 ```
-Running the plot function:
+
+### Running the plot scripts
+
+Running the plot function after the simulation ended:
 ```
-python ../source/cpp/gray-scott/plot/gsplot.py gs.bp/
+python ../source/cpp/gray-scott/plot/gsplot.py -i gs.out
 ```
+When adios2 is used the `-f adios2` needs to be added to the parameters
 
 When adios2 is used for I/O the plot and simulation can run in parallel and stream data between each other.
 ```
-mpirun -n 2 ./bin/adios2-gray-scott-kokkos ../gs-settings.json & python ../source/cpp/gray-scott/plot/gsplot.py gs.bp/
+mpirun -n 2 ./bin/adios2-gray-scott-kokkos ../gs-settings.json & python ../source/cpp/gray-scott/plot/gsplot.py -f adios2 -i gs.bp/
 ```
 
 ## Configurations
