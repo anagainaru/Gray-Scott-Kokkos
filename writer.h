@@ -47,8 +47,10 @@ public:
 			int dx = sim.size_x + 1;
 			int dy = sim.size_y + 1;
 			int dz = sim.size_z + 1;
-			auto u_noghost = Kokkos::subview(u, std::make_pair(1, dx), std::make_pair(1, dy), std::make_pair(1, dz));
-			auto v_noghost = Kokkos::subview(v, std::make_pair(1, dx), std::make_pair(1, dy), std::make_pair(1, dz));
+            Kokkos::View<double***, MemSpace> u_noghost("NoGhostU", sim.size_x, sim.size_y, sim.size_z);
+            Kokkos::deep_copy(u_noghost, Kokkos::subview(u, std::make_pair(1, dx), std::make_pair(1, dy), std::make_pair(1, dz)));
+            Kokkos::View<double***, MemSpace> v_noghost("NoGhostV", sim.size_x, sim.size_y, sim.size_z);
+            Kokkos::deep_copy(v_noghost, Kokkos::subview(v, std::make_pair(1, dx), std::make_pair(1, dy), std::make_pair(1, dz)));
 
 			writer.BeginStep();
 			writer.Put<int>(var_step, &step);

@@ -93,6 +93,7 @@ int main(int argc, char **argv)
 
         using memSpace = Kokkos::DefaultExecutionSpace::memory_space;
         Kokkos::View<double ***, memSpace> u("U", simComm.size_x + 2, simComm.size_y + 2, simComm.size_z + 2);
+        Kokkos::deep_copy(u, 1.0);
         Kokkos::View<double ***, memSpace> v("V", simComm.size_x + 2, simComm.size_y + 2, simComm.size_z + 2);
         InitializeGSData<memSpace>(u, v, settings, simComm);
 
@@ -128,6 +129,9 @@ int main(int argc, char **argv)
         log << "step\ttotal_gs\tcompute_gs\twrite_gs" << std::endl;
 #endif
 
+        Kokkos::View<double ***, memSpace> u2("BackupU", simComm.size_x + 2, simComm.size_y + 2, simComm.size_z + 2);
+        Kokkos::deep_copy(u2, 1.0);
+        Kokkos::View<double ***, memSpace> v2("BackupV", simComm.size_x + 2, simComm.size_y + 2, simComm.size_z + 2);
         for (int it = restart_step; it < settings.steps;)
         {
 #ifdef ENABLE_TIMERS
@@ -136,7 +140,7 @@ int main(int argc, char **argv)
             timer_compute.start();
 #endif
 
-            IterateGS<memSpace>(u, v, settings, simComm);
+            IterateGS<memSpace>(u, v, u2, v2, settings, simComm);
             it++;
 
 #ifdef ENABLE_TIMERS

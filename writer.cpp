@@ -73,12 +73,12 @@ Writer::Writer(const Settings &settings, const GSComm &sim, adios2::IO io)
                                     assocList.size());
 
     var_u = io.DefineVariable<double>("U", {settings.L, settings.L, settings.L},
-                                      {sim.offset_z, sim.offset_y, sim.offset_x},
-                                      {sim.size_z, sim.size_y, sim.size_x});
+                                      {sim.offset_x, sim.offset_y, sim.offset_z},
+                                      {sim.size_x, sim.size_y, sim.size_z});
 
     var_v = io.DefineVariable<double>("V", {settings.L, settings.L, settings.L},
-                                      {sim.offset_z, sim.offset_y, sim.offset_x},
-                                      {sim.size_z, sim.size_y, sim.size_x});
+                                      {sim.offset_x, sim.offset_y, sim.offset_z},
+                                      {sim.size_x, sim.size_y, sim.size_z});
 
     if (settings.adios_memory_selection)
     {
