@@ -1,79 +1,72 @@
+/*
+ * Distributed under the OSI-approved Apache License, Version 2.0.  See
+ * accompanying file Copyright.txt for details.
+ */
+
 #include <fstream>
 #include <iostream>
-#include <sstream>
-#include <vector>
 
-//#include <adios2.h>
+#include <adios2.h>
 #include <mpi.h>
 
-#include <Kokkos_Core.hpp>
+#include "gray-scott.h"
+#include "restart.h"
+#include "timer.hpp"
+#include "writer.h"
 
-#include "settings.hpp"
-#include "simulation.hpp"
-//#include "timer.hpp"
-#include "writer.hpp"
-
-grayscott::Simulation3D create_simulation(grayscott::Settings settings,
-                                          int rank, int procs,
-                                          const MPI_Comm &comm)
+void print_io_settings(const adios2::IO &io)
 {
-    // Dimension of process grid
-    size_t npx, npy, npz;
-    // Coordinate of this rank in process grid
-    size_t px, py, pz;
-
-    MPI_Comm cart_comm;
-    int dims[3] = {};
-    MPI_Dims_create(procs, 3, dims);
-    npx = dims[0];
-    npy = dims[1];
-    npz = dims[2];
-
-    const int periods[3] = {1, 1, 1};
-    MPI_Cart_create(comm, 3, dims, periods, 0, &cart_comm);
-
-    int coords[3] = {};
-    MPI_Cart_coords(cart_comm, rank, 3, coords);
-    px = coords[0];
-    py = coords[1];
-    pz = coords[2];
-
-    std::vector<size_t> size(3);
-    size[0] = settings.L / npx;
-    size[1] = settings.L / npy;
-    size[2] = settings.L / npz;
-
-    if (px < settings.L % npx)
+    std::cout << "Simulation writes data using engine type:              " << io.EngineType()
+              << std::endl;
+    auto ioparams = io.Parameters();
+    std::cout << "IO parameters:  " << std::endl;
+    for (const auto &p : ioparams)
     {
-        size[0]++;
+        std::cout << "    " << p.first << " = " << p.second << std::endl;
     }
-    if (py < settings.L % npy)
-    {
-        size[1]++;
-    }
-    if (pz < settings.L % npz)
-    {
-        size[2]++;
-    }
+}
 
-    std::vector<size_t> offset(3);
-    offset[0] = (settings.L / npx * px) + std::min(settings.L % npx, px);
-    offset[1] = (settings.L / npy * py) + std::min(settings.L % npy, py);
-    offset[2] = (settings.L / npz * pz) + std::min(settings.L % npz, pz);
-    return grayscott::Simulation3D(settings, cart_comm, size, offset);
+void print_settings(const Settings &s, int restart_step)
+{
+    std::cout << "grid:             " << s.L << "x" << s.L << "x" << s.L << std::endl;
+    if (restart_step > 0)
+    {
+        std::cout << "restart:          from step " << restart_step << std::endl;
+    }
+    else
+    {
+        std::cout << "restart:          no" << std::endl;
+    }
+    std::cout << "steps:            " << s.steps << std::endl;
+    std::cout << "plotgap:          " << s.plotgap << std::endl;
+    std::cout << "F:                " << s.F << std::endl;
+    std::cout << "k:                " << s.k << std::endl;
+    std::cout << "dt:               " << s.dt << std::endl;
+    std::cout << "Du:               " << s.Du << std::endl;
+    std::cout << "Dv:               " << s.Dv << std::endl;
+    std::cout << "noise:            " << s.noise << std::endl;
+    std::cout << "output:           " << s.output << std::endl;
+    std::cout << "adios_config:     " << s.adios_config << std::endl;
+}
+
+void print_simulator_settings(const GSComm &s)
+{
+    std::cout << "process layout:   " << s.npx << "x" << s.npy << "x" << s.npz << std::endl;
+    std::cout << "local grid size:  " << s.size_x << "x" << s.size_y << "x" << s.size_z
+              << std::endl;
 }
 
 int main(int argc, char **argv)
 {
     int provided;
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
     int rank, procs, wrank;
 
-    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
     MPI_Comm_rank(MPI_COMM_WORLD, &wrank);
 
-    // const unsigned int color = 1;
-    const MPI_Comm comm = MPI_COMM_WORLD;
-    // MPI_Comm_split(MPI_COMM_WORLD, color, wrank, &comm);
+    const unsigned int color = 1;
+    MPI_Comm comm;
+    MPI_Comm_split(MPI_COMM_WORLD, color, wrank, &comm);
 
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &procs);
@@ -90,101 +83,111 @@ int main(int argc, char **argv)
 
     Kokkos::initialize(argc, argv);
     {
-        const grayscott::Settings settings(argv[1]);
-        grayscott::Simulation3D sim =
-            create_simulation(settings, rank, procs, comm);
-        grayscott::Writer(settings, sim);
-        /*
-                Writer writer;
-                adios2::ADIOS adios(settings.adios_config, comm);
-                adios2::IO io_main = adios.DeclareIO("SimulationOutput");
+        Settings settings = Settings::from_json(argv[1]);
 
-                Writer writer_main(settings, sim, io_main);
-                writer_main.open(settings.output, (restart_step > 0));
+        GSComm simComm(settings, comm);
 
-        */
-        if (rank == 0)
+        adios2::ADIOS adios(settings.adios_config, comm);
+        adios2::IO io_main = adios.DeclareIO("SimulationOutput");
+        adios2::IO io_ckpt = adios.DeclareIO("SimulationCheckpoint");
+
+        using memSpace = Kokkos::DefaultExecutionSpace::memory_space;
+        Kokkos::View<double ***, memSpace> u("U", simComm.size_x + 2, simComm.size_y + 2,
+                                             simComm.size_z + 2);
+        Kokkos::deep_copy(u, 1.0);
+        Kokkos::View<double ***, memSpace> v("V", simComm.size_x + 2, simComm.size_y + 2,
+                                             simComm.size_z + 2);
+        InitializeGSData<memSpace>(u, v, settings, simComm);
+
+        int restart_step = 0;
+        if (settings.restart)
         {
-            //            writer.print_settings();
-            std::cout << "========================================"
-                      << std::endl;
-            settings.print();
-            std::cout << "========================================"
-                      << std::endl;
+            restart_step = ReadRestart(comm, settings, simComm, io_ckpt, u, v);
+            io_main.SetParameter("AppendAfterSteps",
+                                 std::to_string(restart_step / settings.plotgap));
         }
 
-        /*
-        #ifdef ENABLE_TIMERS
-                Timer timer_total;
-                Timer timer_compute;
-                Timer timer_write;
+        Writer writer_main(settings, simComm, io_main);
+        writer_main.open(settings.output, (restart_step > 0));
 
-                std::ostringstream log_fname;
-                log_fname << "gray_scott_pe_" << rank << ".log";
+        if (rank == 0)
+        {
+            print_io_settings(io_main);
+            std::cout << "========================================" << std::endl;
+            print_settings(settings, restart_step);
+            print_simulator_settings(simComm);
+            std::cout << "========================================" << std::endl;
+        }
 
-                std::ofstream log(log_fname.str());
-                log << "step\ttotal_gs\tcompute_gs\twrite_gs" << std::endl;
-        #endif
+#ifdef ENABLE_TIMERS
+        Timer timer_total;
+        Timer timer_compute;
+        Timer timer_write;
 
-                for (int it = restart_step; it < settings.steps;)
+        std::ostringstream log_fname;
+        log_fname << "gray_scott_pe_" << rank << ".log";
+
+        std::ofstream log(log_fname.str());
+        log << "step\ttotal_gs\tcompute_gs\twrite_gs" << std::endl;
+#endif
+
+        Kokkos::View<double ***, memSpace> u2("BackupU", simComm.size_x + 2, simComm.size_y + 2,
+                                              simComm.size_z + 2);
+        Kokkos::deep_copy(u2, 1.0);
+        Kokkos::View<double ***, memSpace> v2("BackupV", simComm.size_x + 2, simComm.size_y + 2,
+                                              simComm.size_z + 2);
+        for (int it = restart_step; it < settings.steps;)
+        {
+#ifdef ENABLE_TIMERS
+            MPI_Barrier(comm);
+            timer_total.start();
+            timer_compute.start();
+#endif
+
+            IterateGS<memSpace>(u, v, u2, v2, settings, simComm);
+            it++;
+
+#ifdef ENABLE_TIMERS
+            timer_compute.stop();
+            MPI_Barrier(comm);
+            timer_write.start();
+#endif
+
+            if (it % settings.plotgap == 0)
+            {
+                if (rank == 0)
                 {
-        #ifdef ENABLE_TIMERS
-                    MPI_Barrier(comm);
-                    timer_total.start();
-                    timer_compute.start();
-        #endif
-
-                    sim.iterate();
-                    it++;
-
-        #ifdef ENABLE_TIMERS
-                    timer_compute.stop();
-                    MPI_Barrier(comm);
-                    timer_write.start();
-        #endif
-
-                    if (it % settings.plotgap == 0)
-                    {
-                        if (rank == 0)
-                        {
-                            std::cout << "Simulation at step " << it
-                                      << " writing output step     "
-                                      << it / settings.plotgap << std::endl;
-                        }
-
-                        writer_main.write(it, sim);
-                    }
-
-                    if (settings.checkpoint && (it % settings.checkpoint_freq)
-        == 0)
-                    {
-                        WriteCkpt(comm, it, settings, sim, io_ckpt);
-                    }
-
-        #ifdef ENABLE_TIMERS
-                    double time_write = timer_write.stop();
-                    double time_step = timer_total.stop();
-                    MPI_Barrier(comm);
-
-                    log << it << "\t" << timer_total.elapsed() << "\t"
-                        << timer_compute.elapsed() << "\t" <<
-        timer_write.elapsed()
-                        << std::endl;
-        #endif
+                    std::cout << "Simulation at step " << it << " writing output step     "
+                              << it / settings.plotgap << std::endl;
                 }
 
-                writer_main.close();
-                */
+                writer_main.write(it, simComm, u, v);
+            }
+
+            if (settings.checkpoint && (it % settings.checkpoint_freq) == 0)
+            {
+                WriteCkpt(comm, it, settings, simComm, io_ckpt, u, v);
+            }
+
+#ifdef ENABLE_TIMERS
+            double time_write = timer_write.stop();
+            double time_step = timer_total.stop();
+            MPI_Barrier(comm);
+
+            log << it << "\t" << timer_total.elapsed() << "\t" << timer_compute.elapsed() << "\t"
+                << timer_write.elapsed() << std::endl;
+#endif
+        }
+
+        writer_main.close();
     }
     Kokkos::finalize();
-    /*
 #ifdef ENABLE_TIMERS
-    log << "total\t" << timer_total.elapsed() << "\t" << timer_compute.elapsed()
-        << "\t" << timer_write.elapsed() << std::endl;
+    log << "total\t" << timer_total.elapsed() << "\t" << timer_compute.elapsed() << "\t"
+        << timer_write.elapsed() << std::endl;
 
     log.close();
 #endif
-    */
 
     MPI_Finalize();
 }
