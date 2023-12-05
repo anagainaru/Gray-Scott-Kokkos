@@ -92,9 +92,11 @@ int main(int argc, char **argv)
         adios2::IO io_ckpt = adios.DeclareIO("SimulationCheckpoint");
 
         using memSpace = Kokkos::DefaultExecutionSpace::memory_space;
-        Kokkos::View<double ***, memSpace> u("U", simComm.size_x + 2, simComm.size_y + 2, simComm.size_z + 2);
+        Kokkos::View<double ***, memSpace> u("U", simComm.size_x + 2, simComm.size_y + 2,
+                                             simComm.size_z + 2);
         Kokkos::deep_copy(u, 1.0);
-        Kokkos::View<double ***, memSpace> v("V", simComm.size_x + 2, simComm.size_y + 2, simComm.size_z + 2);
+        Kokkos::View<double ***, memSpace> v("V", simComm.size_x + 2, simComm.size_y + 2,
+                                             simComm.size_z + 2);
         InitializeGSData<memSpace>(u, v, settings, simComm);
 
         int restart_step = 0;
@@ -129,9 +131,11 @@ int main(int argc, char **argv)
         log << "step\ttotal_gs\tcompute_gs\twrite_gs" << std::endl;
 #endif
 
-        Kokkos::View<double ***, memSpace> u2("BackupU", simComm.size_x + 2, simComm.size_y + 2, simComm.size_z + 2);
+        Kokkos::View<double ***, memSpace> u2("BackupU", simComm.size_x + 2, simComm.size_y + 2,
+                                              simComm.size_z + 2);
         Kokkos::deep_copy(u2, 1.0);
-        Kokkos::View<double ***, memSpace> v2("BackupV", simComm.size_x + 2, simComm.size_y + 2, simComm.size_z + 2);
+        Kokkos::View<double ***, memSpace> v2("BackupV", simComm.size_x + 2, simComm.size_y + 2,
+                                              simComm.size_z + 2);
         for (int it = restart_step; it < settings.steps;)
         {
 #ifdef ENABLE_TIMERS

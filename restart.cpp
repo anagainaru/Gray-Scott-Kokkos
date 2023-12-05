@@ -3,20 +3,14 @@
  * accompanying file Copyright.txt for details.
  */
 
-#ifndef __RESTART_H__
-#define __RESTART_H__
+#include "restart.h"
 
-#include "gray-scott.h"
-
-#include <adios2.h>
-#include <mpi.h>
+#include <iostream>
 
 static bool firstCkpt = true;
 
-template <class MemSpace>
-void WriteCkpt(MPI_Comm comm, const int step, const Settings &settings, const GSComm &sim,
-               adios2::IO io, const Kokkos::View<double ***, MemSpace> &u,
-               const Kokkos::View<double ***, MemSpace> &v)
+void WriteCkpt(MPI_Comm comm, const int step, const Settings &settings, const GrayScott &sim,
+               adios2::IO io)
 {
     int rank, nproc;
     MPI_Comm_rank(comm, &rank);
@@ -52,17 +46,14 @@ void WriteCkpt(MPI_Comm comm, const int step, const Settings &settings, const GS
         }
 
         writer.Put<int>(var_step, &step);
-        writer.Put<double>(var_u, u.data());
-        writer.Put<double>(var_v, v.data());
+        writer.Put<double>(var_u, sim.u_ghost().data());
+        writer.Put<double>(var_v, sim.v_ghost().data());
 
         writer.Close();
     }
-};
+}
 
-template <class MemSpace>
-int ReadRestart(MPI_Comm comm, const Settings &settings, GSComm &sim, adios2::IO io,
-                const Kokkos::View<double ***, MemSpace> &u,
-                const Kokkos::View<double ***, MemSpace> &v)
+int ReadRestart(MPI_Comm comm, const Settings &settings, GrayScott &sim, adios2::IO io)
 {
     int step = 0;
     int rank, nproc;
@@ -82,23 +73,24 @@ int ReadRestart(MPI_Comm comm, const Settings &settings, GSComm &sim, adios2::IO
         size_t Y = sim.size_y + 2;
         size_t Z = sim.size_z + 2;
         size_t R = static_cast<size_t>(rank);
+        std::vector<double> u, v;
 
         var_u.SetSelection({{R, 0, 0, 0}, {1, X, Y, Z}});
         var_v.SetSelection({{R, 0, 0, 0}, {1, X, Y, Z}});
         reader.Get<int>(var_step, step);
-        reader.Get<double>(var_u, u.data());
-        reader.Get<double>(var_v, v.data());
+        reader.Get<double>(var_u, u);
+        reader.Get<double>(var_v, v);
         reader.Close();
 
         if (!rank)
         {
             std::cout << "restart from step " << step << std::endl;
         }
+        sim.restart(u, v);
     }
     else
     {
         std::cout << "    failed to open file " << std::endl;
     }
     return step;
-};
-#endif
+}
