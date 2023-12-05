@@ -9,9 +9,6 @@
 #include <adios2.h>
 #include <mpi.h>
 
-#include <Kokkos_Core.hpp>
-#include <Kokkos_Random.hpp>
-
 #include "gray-scott.h"
 #include "restart.h"
 #include "timer.hpp"

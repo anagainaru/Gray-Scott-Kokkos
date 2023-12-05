@@ -99,40 +99,4 @@ void Writer::open(const std::string &fname, bool append)
     writer = io.Open(fname, mode);
 }
 
-template <class MemSpace>
-void Writer::write(int step, const GSComm &sim, const Kokkos::View<double ***, MemSpace> &u,
-                   const Kokkos::View<double ***, MemSpace> &v)
-{
-    if (!sim.size_x || !sim.size_y || !sim.size_z)
-    {
-        writer.BeginStep();
-        writer.EndStep();
-        return;
-    }
-
-    if (settings.adios_memory_selection)
-    {
-        writer.BeginStep();
-        writer.Put<int>(var_step, &step);
-        writer.Put<double>(var_u, u.data());
-        writer.Put<double>(var_v, v.data());
-        writer.EndStep();
-    }
-    else if (settings.adios_span)
-    {
-        std::cout << "ADIOS2 Span with Kokkos currently not supported" << std::endl;
-    }
-    else
-    {
-        auto u_noghost = Kokkos::subview(u, std::make_pair(1, sim.size_x + 1), std::make_pair(1, sim.size_y + 1), std::make_pair(1, sim.size_z + 1));
-        auto v_noghost = Kokkos::subview(v, std::make_pair(1, sim.size_x + 1), std::make_pair(1, sim.size_y + 1), std::make_pair(1, sim.size_z + 1));
-
-        writer.BeginStep();
-        writer.Put<int>(var_step, &step);
-        writer.Put<double>(var_u, u_noghost.data());
-        writer.Put<double>(var_v, v_noghost.data());
-        writer.EndStep();
-    }
-}
-
 void Writer::close() { writer.Close(); }
