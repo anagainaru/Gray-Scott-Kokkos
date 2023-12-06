@@ -182,20 +182,16 @@ void InitializeGSData(const Kokkos::View<double ***, MemSpace> &u,
     size_t const ox = simComm.offset_x, oy = simComm.offset_y, oz = simComm.offset_z;
     size_t const sx = simComm.size_x, sy = simComm.size_y, sz = simComm.size_z;
     auto const min_x = std::max(settings.L / 2 - d, simComm.offset_x);
-    auto const max_x = std::min(settings.L / 2 + d, simComm.offset_x + simComm.size_x);
+    auto const max_x = std::min(settings.L / 2 + d, simComm.offset_x + simComm.size_x + 1);
+    auto const min_y = std::max(settings.L / 2 - d, simComm.offset_y);
+    auto const max_y = std::min(settings.L / 2 + d, simComm.offset_y + simComm.size_y + 1);
+    auto const min_z = std::max(settings.L / 2 - d, simComm.offset_z);
+    auto const max_z = std::min(settings.L / 2 + d, simComm.offset_z + simComm.size_z + 1);
     Kokkos::parallel_for("init_buffers", Kokkos::RangePolicy<>(min_x, max_x), KOKKOS_LAMBDA(int x) {
-        for (int y = settingsL / 2 - d; y < settingsL / 2 + d; y++)
+        for (int y = min_y; y < max_y; y++)
         {
-            if (y < static_cast<int>(oy))
-                continue;
-            if (y >= static_cast<int>(oy + sy))
-                continue;
-            for (int z = settingsL / 2 - d; z < settingsL / 2 + d; z++)
+            for (int z = min_z; z < max_z; z++)
             {
-                if (z < static_cast<int>(oz))
-                    continue;
-                if (z >= static_cast<int>(oz + sz))
-                    continue;
                 u(x - ox, y - oy, z - oz) = 0.25;
                 v(x - ox, y - oy, z - oz) = 0.33;
             }
