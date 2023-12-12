@@ -187,15 +187,12 @@ void InitializeGSData(const Kokkos::View<double ***, MemSpace> &u,
     auto const max_y = std::min(settings.L / 2 + d, simComm.offset_y + simComm.size_y + 1);
     auto const min_z = std::max(settings.L / 2 - d, simComm.offset_z);
     auto const max_z = std::min(settings.L / 2 + d, simComm.offset_z + simComm.size_z + 1);
-    Kokkos::parallel_for("init_buffers", Kokkos::RangePolicy<>(min_x, max_x), KOKKOS_LAMBDA(int x) {
-        for (int y = min_y; y < max_y; y++)
-        {
-            for (int z = min_z; z < max_z; z++)
-            {
-                u(x - ox, y - oy, z - oz) = 0.25;
-                v(x - ox, y - oy, z - oz) = 0.33;
-            }
-        }
+    Kokkos::parallel_for("init_buffers",
+            Kokkos::MDRangePolicy< Kokkos::Rank<3> > ({min_x, min_y, min_z}, {max_x, max_y, max_z}),
+            KOKKOS_LAMBDA(int x, int y, int z)
+    {
+        u(x - ox, y - oy, z - oz) = 0.25;
+        v(x - ox, y - oy, z - oz) = 0.33;
     });
 };
 
@@ -213,16 +210,13 @@ void ComputeNextIteration(Kokkos::View<double ***, MemSpace> &u,
     auto const noise = settings.noise;
     size_t const sx = simComm.size_x, sy = simComm.size_y, sz = simComm.size_z;
     auto const random_pool = simComm.rand_pool;
-    Kokkos::parallel_for("calc_gray_scott", Kokkos::RangePolicy<>(1, sx + 1), KOKKOS_LAMBDA(int x) {
-        GSComm::RandomPool::generator_type generator = random_pool.get_state();
-        double ts;
-        for (int y = 1; y < static_cast<int>(sy) + 1; y++)
-        {
-            for (int z = 1; z < static_cast<int>(sz) + 1; z++)
-            {
+    GSComm::RandomPool::generator_type generator = random_pool.get_state();
+    Kokkos::parallel_for("calc_gray_scott",
+            Kokkos::MDRangePolicy< Kokkos::Rank<3> > ({1, 1, 1}, {sx+1, sy+1, sz+1}),
+            KOKKOS_LAMBDA(int x, int y, int z)
                 double du, dv;
                 // laplacian for u
-                ts = 0;
+                double ts = 0;
                 ts += u(x - 1, y, z);
                 ts += u(x + 1, y, z);
                 ts += u(x, y - 1, z);
@@ -250,10 +244,8 @@ void ComputeNextIteration(Kokkos::View<double ***, MemSpace> &u,
                 // du += noise * generator.frand(-1.f, 1.f);
                 u2(x, y, z) = u(x, y, z) + du * dt;
                 v2(x, y, z) = v(x, y, z) + dv * dt;
-            }
-        }
-        random_pool.free_state(generator);
     });
+    random_pool.free_state(generator);
     std::swap(u, u2);
     std::swap(v, v2);
 };
