@@ -12,6 +12,34 @@
 
 #include "settings.h"
 
+template <class MemSpace>
+struct PlaneBuffer
+{
+    Kokkos::View<double **, MemSpace> firstPlaneGhost;
+    Kokkos::View<double **, MemSpace> lastPlaneGhost;
+    Kokkos::View<double **, MemSpace> firstPlaneData;
+    Kokkos::View<double **, MemSpace> lastPlaneData;
+    PlaneBuffer(size_t x, size_t y): firstPlaneGhost("firstGhostPlane", x, y), lastPlaneGhost("lastGhostPlane", x, y), firstPlaneData("firstDataPlane", x, y), lastPlaneData("lastDataPlane", x, y)
+    {};
+};
+
+template <class MemSpace>
+struct SimData
+{
+    Kokkos::View<double ***, MemSpace> u;
+    Kokkos::View<double ***, MemSpace> v;
+    Kokkos::View<double ***, MemSpace> u2;
+    Kokkos::View<double ***, MemSpace> v2;
+    PlaneBuffer<MemSpace> mpiBufferXY;
+    PlaneBuffer<MemSpace> mpiBufferXZ;
+    PlaneBuffer<MemSpace> mpiBufferYZ;
+    SimData(size_t x, size_t y, size_t z): u("U", x + 2, y + 2, z + 2), v("V", x + 2, y + 2, z + 2), u2("BackupU", x + 2, y + 2, z + 2), v2("BackupV", x + 2, y + 2, z + 2), mpiBufferXY(x + 2, y + 2), mpiBufferXZ(x + 2, z + 2), mpiBufferYZ(y + 2, z + 2)
+    {
+        Kokkos::deep_copy(u, 1.0);
+        Kokkos::deep_copy(u2, 1.0);
+    };
+};
+
 class GSComm
 {
 private:
@@ -78,97 +106,72 @@ public:
 
     // Exchange XY faces with north/south
     template <class MemSpace>
-    void exchange_xy(Kokkos::View<double ***, MemSpace> localData) const
+    void exchange_xy(Kokkos::View<double ***, MemSpace> localData, PlaneBuffer<MemSpace> borders) const
     {
-        int sx = size_x + 2;
-        int sy = size_y + 2;
-        // copy the first and last xy surface to a CPU structure
-        Kokkos::View<double **, MemSpace> firstXYGhost("firstGhostPlane", sx, sy);
-        Kokkos::View<double **, MemSpace> lastXYGhost("lastGhostPlane", sx, sy);
-        Kokkos::View<double **, Kokkos::HostSpace> firstXYData("firstDataPlane", sx, sy);
-        Kokkos::deep_copy(firstXYData, Kokkos::subview(localData, Kokkos::ALL, Kokkos::ALL, 1));
-        Kokkos::View<double **, Kokkos::HostSpace> lastXYData("lastDataPlane", sx, sy);
-        Kokkos::deep_copy(lastXYData, Kokkos::subview(localData, Kokkos::ALL, Kokkos::ALL, size_z));
+        auto x = size_x + 2;
+        auto y = size_y + 2;
+        // copy the first and last xy surface to a continuous buffer
+        Kokkos::deep_copy(borders.firstPlaneData, Kokkos::subview(localData, Kokkos::ALL, Kokkos::ALL, 1));
+        Kokkos::deep_copy(borders.lastPlaneData, Kokkos::subview(localData, Kokkos::ALL, Kokkos::ALL, size_z));
         MPI_Status st;
 
         // Send XY face z=size_z to north and receive z=0 from south
-        MPI_Sendrecv(lastXYData.data(), sx * sy, MPI_DOUBLE, north, 1, firstXYGhost.data(), sx * sy,
+        MPI_Sendrecv(borders.lastPlaneData.data(), x * y, MPI_DOUBLE, north, 1, borders.firstPlaneGhost.data(), x * y,
                      MPI_DOUBLE, south, 1, cart_comm, &st);
         // Send XY face z=1 to south and receive z=size_z+1 from north
-        MPI_Sendrecv(firstXYData.data(), sx * sy, MPI_DOUBLE, south, 1, lastXYGhost.data(), sx * sy,
+        MPI_Sendrecv(borders.firstPlaneData.data(), x * y, MPI_DOUBLE, south, 1, borders.lastPlaneGhost.data(), x * y,
                      MPI_DOUBLE, north, 1, cart_comm, &st);
 
-        Kokkos::deep_copy(Kokkos::subview(localData, Kokkos::ALL, Kokkos::ALL, 0), firstXYGhost);
+        // move the ghost planes to the data
+        Kokkos::deep_copy(Kokkos::subview(localData, Kokkos::ALL, Kokkos::ALL, 0), borders.firstPlaneGhost);
         Kokkos::deep_copy(Kokkos::subview(localData, Kokkos::ALL, Kokkos::ALL, size_z + 1),
-                          lastXYGhost);
+                          borders.lastPlaneGhost);
     };
 
     // Exchange XZ faces with up/down
     template <class MemSpace>
-    void exchange_xz(Kokkos::View<double ***, MemSpace> localData) const
+    void exchange_xz(Kokkos::View<double ***, MemSpace> localData, PlaneBuffer<MemSpace> borders) const
     {
-        int sx = size_x + 2;
-        int sz = size_z + 2;
+        auto x = size_x + 2;
+        auto z = size_z + 2;
         // copy the first and last xz surface to a CPU structure
-        Kokkos::View<double **, MemSpace> firstXZGhost("firstGhostPlane", sx, sz);
-        Kokkos::View<double **, MemSpace> lastXZGhost("lastGhostPlane", sx, sz);
-        Kokkos::View<double **, Kokkos::HostSpace> firstXZData("firstDataPlane", sx, sz);
-        Kokkos::deep_copy(firstXZData, Kokkos::subview(localData, Kokkos::ALL, 1, Kokkos::ALL));
-        Kokkos::View<double **, Kokkos::HostSpace> lastXZData("lastDataPlane", sx, sz);
-        Kokkos::deep_copy(lastXZData, Kokkos::subview(localData, Kokkos::ALL, size_y, Kokkos::ALL));
+        Kokkos::deep_copy(borders.firstPlaneData, Kokkos::subview(localData, Kokkos::ALL, 1, Kokkos::ALL));
+        Kokkos::deep_copy(borders.lastPlaneData, Kokkos::subview(localData, Kokkos::ALL, size_y, Kokkos::ALL));
         MPI_Status st;
 
         // Send XZ face y=size_y to up and receive y=0 from down
-        MPI_Sendrecv(lastXZData.data(), sx * sz, MPI_DOUBLE, up, 2, firstXZGhost.data(), sx * sz,
+        MPI_Sendrecv(borders.lastPlaneData.data(), x * z, MPI_DOUBLE, up, 2, borders.firstPlaneGhost.data(), x * z,
                      MPI_DOUBLE, down, 2, cart_comm, &st);
         // Send XZ face y=1 to down and receive y=size_y+1 from up
-        MPI_Sendrecv(firstXZData.data(), sx * sz, MPI_DOUBLE, down, 2, lastXZGhost.data(), sx * sz,
+        MPI_Sendrecv(borders.firstPlaneData.data(), x * z, MPI_DOUBLE, down, 2, borders.lastPlaneGhost.data(), x * z,
                      MPI_DOUBLE, up, 2, cart_comm, &st);
 
-        Kokkos::deep_copy(Kokkos::subview(localData, Kokkos::ALL, 0, Kokkos::ALL), firstXZGhost);
+        Kokkos::deep_copy(Kokkos::subview(localData, Kokkos::ALL, 0, Kokkos::ALL), borders.firstPlaneGhost);
         Kokkos::deep_copy(Kokkos::subview(localData, Kokkos::ALL, size_y + 1, Kokkos::ALL),
-                          lastXZGhost);
+                          borders.lastPlaneGhost);
     };
 
     // Exchange YZ faces with west/east
     template <class MemSpace>
-    void exchange_yz(Kokkos::View<double ***, MemSpace> localData) const
+    void exchange_yz(Kokkos::View<double ***, MemSpace> localData, PlaneBuffer<MemSpace> borders) const
     {
-        int sy = size_y + 2;
-        int sz = size_z + 2;
+        auto y = size_y + 2;
+        auto z = size_z + 2;
         // copy the first and last yz surface to a CPU structure
-        Kokkos::View<double **, MemSpace> firstYZGhost("firstGhostPlane", sy, sz);
-        Kokkos::View<double **, MemSpace> lastYZGhost("lastGhostPlane", sy, sz);
-        Kokkos::View<double **, Kokkos::HostSpace> firstYZData("firstDataPlane", sy, sz);
-        Kokkos::deep_copy(firstYZData, Kokkos::subview(localData, 1, Kokkos::ALL, Kokkos::ALL));
-        Kokkos::View<double **, Kokkos::HostSpace> lastYZData("lastDataPlane", sy, sz);
-        Kokkos::deep_copy(lastYZData, Kokkos::subview(localData, size_x, Kokkos::ALL, Kokkos::ALL));
+        Kokkos::deep_copy(borders.firstPlaneData, Kokkos::subview(localData, 1, Kokkos::ALL, Kokkos::ALL));
+        Kokkos::deep_copy(borders.lastPlaneData, Kokkos::subview(localData, size_x, Kokkos::ALL, Kokkos::ALL));
         MPI_Status st;
 
-        // Send YZ face x=size_x to east and receive x=0 from west
-        MPI_Sendrecv(lastYZData.data(), sy * sz, MPI_DOUBLE, east, 3, firstYZGhost.data(), sy * sz,
+        // Send Plane face x=size_x to east and receive x=0 from west
+        MPI_Sendrecv(borders.lastPlaneData.data(), y * z, MPI_DOUBLE, east, 3, borders.firstPlaneGhost.data(), y * z,
                      MPI_DOUBLE, west, 3, cart_comm, &st);
-        // Send YZ face x=1 to west and receive x=size_x+1 from east
-        MPI_Sendrecv(firstYZData.data(), sy * sz, MPI_DOUBLE, west, 3, lastYZGhost.data(), sy * sz,
+        // Send Plane face x=1 to west and receive x=size_x+1 from east
+        MPI_Sendrecv(borders.firstPlaneData.data(), y * z, MPI_DOUBLE, west, 3, borders.lastPlaneGhost.data(), y * z,
                      MPI_DOUBLE, east, 3, cart_comm, &st);
 
-        Kokkos::deep_copy(Kokkos::subview(localData, 0, Kokkos::ALL, Kokkos::ALL), firstYZGhost);
+        Kokkos::deep_copy(Kokkos::subview(localData, 0, Kokkos::ALL, Kokkos::ALL), borders.firstPlaneGhost);
         Kokkos::deep_copy(Kokkos::subview(localData, size_x + 1, Kokkos::ALL, Kokkos::ALL),
-                          lastYZGhost);
-    };
-
-    // Exchange faces with neighbors
-    template <class MemSpace>
-    void ExchangeBorders(Kokkos::View<double ***, MemSpace> u,
-                         Kokkos::View<double ***, MemSpace> v) const
-    {
-        exchange_xy(u);
-        exchange_xz(u);
-        exchange_yz(u);
-
-        exchange_xy(v);
-        exchange_xz(v);
-        exchange_yz(v);
+                          borders.lastPlaneGhost);
     };
 };
 
@@ -182,24 +185,17 @@ void InitializeGSData(const Kokkos::View<double ***, MemSpace> &u,
     size_t const ox = simComm.offset_x, oy = simComm.offset_y, oz = simComm.offset_z;
     size_t const sx = simComm.size_x, sy = simComm.size_y, sz = simComm.size_z;
     auto const min_x = std::max(settings.L / 2 - d, simComm.offset_x);
-    auto const max_x = std::min(settings.L / 2 + d, simComm.offset_x + simComm.size_x);
-    Kokkos::parallel_for("init_buffers", Kokkos::RangePolicy<>(min_x, max_x), KOKKOS_LAMBDA(int x) {
-        for (int y = settingsL / 2 - d; y < settingsL / 2 + d; y++)
-        {
-            if (y < static_cast<int>(oy))
-                continue;
-            if (y >= static_cast<int>(oy + sy))
-                continue;
-            for (int z = settingsL / 2 - d; z < settingsL / 2 + d; z++)
-            {
-                if (z < static_cast<int>(oz))
-                    continue;
-                if (z >= static_cast<int>(oz + sz))
-                    continue;
-                u(x - ox, y - oy, z - oz) = 0.25;
-                v(x - ox, y - oy, z - oz) = 0.33;
-            }
-        }
+    auto const max_x = std::min(settings.L / 2 + d, simComm.offset_x + simComm.size_x + 1);
+    auto const min_y = std::max(settings.L / 2 - d, simComm.offset_y);
+    auto const max_y = std::min(settings.L / 2 + d, simComm.offset_y + simComm.size_y + 1);
+    auto const min_z = std::max(settings.L / 2 - d, simComm.offset_z);
+    auto const max_z = std::min(settings.L / 2 + d, simComm.offset_z + simComm.size_z + 1);
+    Kokkos::parallel_for("init_buffers",
+            Kokkos::MDRangePolicy< Kokkos::Rank<3> > ({min_x, min_y, min_z}, {max_x, max_y, max_z}),
+            KOKKOS_LAMBDA(int x, int y, int z)
+    {
+        u(x - ox, y - oy, z - oz) = 0.25;
+        v(x - ox, y - oy, z - oz) = 0.33;
     });
 };
 
@@ -217,16 +213,14 @@ void ComputeNextIteration(Kokkos::View<double ***, MemSpace> &u,
     auto const noise = settings.noise;
     size_t const sx = simComm.size_x, sy = simComm.size_y, sz = simComm.size_z;
     auto const random_pool = simComm.rand_pool;
-    Kokkos::parallel_for("calc_gray_scott", Kokkos::RangePolicy<>(1, sx + 1), KOKKOS_LAMBDA(int x) {
-        GSComm::RandomPool::generator_type generator = random_pool.get_state();
-        double ts;
-        for (int y = 1; y < static_cast<int>(sy) + 1; y++)
-        {
-            for (int z = 1; z < static_cast<int>(sz) + 1; z++)
-            {
+    GSComm::RandomPool::generator_type generator = random_pool.get_state();
+    Kokkos::parallel_for("calc_gray_scott",
+            Kokkos::MDRangePolicy< Kokkos::Rank<3> > ({1, 1, 1}, {sx+1, sy+1, sz+1}),
+            KOKKOS_LAMBDA(int x, int y, int z)
+    {
                 double du, dv;
                 // laplacian for u
-                ts = 0;
+                double ts = 0;
                 ts += u(x - 1, y, z);
                 ts += u(x + 1, y, z);
                 ts += u(x, y - 1, z);
@@ -254,21 +248,25 @@ void ComputeNextIteration(Kokkos::View<double ***, MemSpace> &u,
                 // du += noise * generator.frand(-1.f, 1.f);
                 u2(x, y, z) = u(x, y, z) + du * dt;
                 v2(x, y, z) = v(x, y, z) + dv * dt;
-            }
-        }
-        random_pool.free_state(generator);
     });
+    random_pool.free_state(generator);
     std::swap(u, u2);
     std::swap(v, v2);
 };
 
 template <class MemSpace>
-void IterateGS(Kokkos::View<double ***, MemSpace> &u, Kokkos::View<double ***, MemSpace> &v,
-               Kokkos::View<double ***, MemSpace> &u2, Kokkos::View<double ***, MemSpace> &v2,
-               Settings settings, GSComm simComm)
+void IterateGS(SimData<MemSpace> &simData, Settings settings, GSComm simComm)
 {
-    simComm.ExchangeBorders(u, v);
-    ComputeNextIteration<MemSpace>(u, v, u2, v2, settings, simComm);
+    // stencil exchange planes with neighbors
+    simComm.exchange_xy(simData.u, simData.mpiBufferXY);
+    simComm.exchange_xz(simData.u, simData.mpiBufferXZ);
+    simComm.exchange_yz(simData.u, simData.mpiBufferYZ);
+
+    simComm.exchange_xy(simData.v, simData.mpiBufferXY);
+    simComm.exchange_xz(simData.v, simData.mpiBufferXZ);
+    simComm.exchange_yz(simData.v, simData.mpiBufferYZ);
+
+    ComputeNextIteration<MemSpace>(simData.u, simData.v, simData.u2, simData.v2, settings, simComm);
 };
 
 #endif
