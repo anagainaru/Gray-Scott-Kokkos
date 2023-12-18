@@ -16,12 +16,11 @@ class GSComm
 {
 private:
     int rank, procs;
-
-    int west, east, up, down, north, south;
     MPI_Comm comm;
     MPI_Comm cart_comm;
 
 public:
+    int west, east, up, down, north, south;
     // Dimension of process grid
     size_t npx, npy, npz;
     // Coordinate of this rank in process grid
@@ -206,14 +205,12 @@ public:
 };
 
 template <class MemSpace>
-void InitializeGSData(const Kokkos::View<double ***, MemSpace> &u,
-                      const Kokkos::View<double ***, MemSpace> &v, Settings settings,
-                      GSComm simComm)
+void InitializeViews(const Kokkos::View<double ***, MemSpace> &u,
+                const Kokkos::View<double ***, MemSpace> &v, Settings settings,
+                GSComm simComm)
 {
     const int d = 6;
-    auto const settingsL = static_cast<int>(settings.L);
     size_t const ox = simComm.offset_x, oy = simComm.offset_y, oz = simComm.offset_z;
-    size_t const sx = simComm.size_x, sy = simComm.size_y, sz = simComm.size_z;
     auto const min_x = std::max(settings.L / 2 - d, simComm.offset_x);
     auto const max_x = std::min(settings.L / 2 + d, simComm.offset_x + simComm.size_x + 1);
     auto const min_y = std::max(settings.L / 2 - d, simComm.offset_y);
@@ -230,6 +227,29 @@ void InitializeGSData(const Kokkos::View<double ***, MemSpace> &u,
             }
         }
     });
+};
+
+template <class MemSpace>
+void InitializeGSData(const Kokkos::View<double ***, MemSpace> &u,
+                      const Kokkos::View<double ***, MemSpace> &v, Settings settings,
+                      GSComm &simComm)
+{
+	InitializeViews(u, v, settings, simComm);
+	// switch the communication direction between planes XY and YZ
+	auto temp = simComm.north;
+	simComm.north = simComm.east;
+	simComm.east = temp;
+	temp = simComm.south;
+	simComm.south = simComm.west;
+	simComm.west = temp;
+};
+
+template <>
+inline void InitializeGSData(const Kokkos::View<double ***, Kokkos::HostSpace> &u,
+                      const Kokkos::View<double ***, Kokkos::HostSpace> &v, Settings settings,
+                      GSComm &simComm)
+{
+	InitializeViews(u, v, settings, simComm);
 };
 
 template <class MemSpace>
