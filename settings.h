@@ -26,8 +26,6 @@ struct Settings
     bool restart;
     std::string restart_input;
     std::string adios_config;
-    bool adios_span;
-    bool adios_memory_selection;
     std::string mesh_type;
 
     Settings();

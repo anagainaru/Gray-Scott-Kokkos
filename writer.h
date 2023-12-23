@@ -23,47 +23,26 @@ public:
     void write(int step, const GSComm &sim, const Kokkos::View<double ***, MemSpace> &u,
                const Kokkos::View<double ***, MemSpace> &v)
     {
-        if (!sim.size_x || !sim.size_y || !sim.size_z)
-        {
-            writer.BeginStep();
-            writer.EndStep();
-            return;
-        }
+		int dx = sim.size_x + 1;
+		int dy = sim.size_y + 1;
+		int dz = sim.size_z + 1;
+		Kokkos::View<double ***, MemSpace> u_noghost("NoGhostU", sim.size_x, sim.size_y,
+													 sim.size_z);
+		Kokkos::deep_copy(u_noghost,
+						  Kokkos::subview(u, std::make_pair(1, dx), std::make_pair(1, dy),
+										  std::make_pair(1, dz)));
+		Kokkos::View<double ***, MemSpace> v_noghost("NoGhostV", sim.size_x, sim.size_y,
+													 sim.size_z);
+		Kokkos::deep_copy(v_noghost,
+						  Kokkos::subview(v, std::make_pair(1, dx), std::make_pair(1, dy),
+										  std::make_pair(1, dz)));
 
-        if (settings.adios_memory_selection)
-        {
-            writer.BeginStep();
-            writer.Put<int>(var_step, &step);
-            writer.Put<double>(var_u, u.data());
-            writer.Put<double>(var_v, v.data());
-            writer.EndStep();
-        }
-        else if (settings.adios_span)
-        {
-            std::cout << "ADIOS2 Span with Kokkos currently not supported" << std::endl;
-        }
-        else
-        {
-            int dx = sim.size_x + 1;
-            int dy = sim.size_y + 1;
-            int dz = sim.size_z + 1;
-            Kokkos::View<double ***, MemSpace> u_noghost("NoGhostU", sim.size_x, sim.size_y,
-                                                         sim.size_z);
-            Kokkos::deep_copy(u_noghost,
-                              Kokkos::subview(u, std::make_pair(1, dx), std::make_pair(1, dy),
-                                              std::make_pair(1, dz)));
-            Kokkos::View<double ***, MemSpace> v_noghost("NoGhostV", sim.size_x, sim.size_y,
-                                                         sim.size_z);
-            Kokkos::deep_copy(v_noghost,
-                              Kokkos::subview(v, std::make_pair(1, dx), std::make_pair(1, dy),
-                                              std::make_pair(1, dz)));
+		writer.BeginStep();
 
-            writer.BeginStep();
-            writer.Put<int>(var_step, &step);
-            writer.Put<double>(var_u, u_noghost.data());
-            writer.Put<double>(var_v, v_noghost.data());
-            writer.EndStep();
-        }
+		writer.Put<int>(var_step, &step);
+		writer.Put<double>(var_u, u_noghost.data());
+		writer.Put<double>(var_v, v_noghost.data());
+		writer.EndStep();
     };
 
 protected:

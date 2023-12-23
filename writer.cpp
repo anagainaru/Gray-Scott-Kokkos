@@ -80,12 +80,6 @@ Writer::Writer(const Settings &settings, const GSComm &sim, adios2::IO io)
                                       {sim.offset_x, sim.offset_y, sim.offset_z},
                                       {sim.size_x, sim.size_y, sim.size_z});
 
-    if (settings.adios_memory_selection)
-    {
-        var_u.SetMemorySelection({{1, 1, 1}, {sim.size_z + 2, sim.size_y + 2, sim.size_x + 2}});
-        var_v.SetMemorySelection({{1, 1, 1}, {sim.size_z + 2, sim.size_y + 2, sim.size_x + 2}});
-    }
-
     var_step = io.DefineVariable<int>("step");
 }
 
