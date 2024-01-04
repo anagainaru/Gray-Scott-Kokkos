@@ -21,8 +21,6 @@ void WriteCkpt(MPI_Comm comm, const int step, const Settings &settings, const GS
     int rank, nproc;
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &nproc);
-    std::cout << "checkpoint at step " << step << " create file " << settings.checkpoint_output
-              << std::endl;
     adios2::Engine writer = io.Open(settings.checkpoint_output, adios2::Mode::Write);
     if (writer)
     {
