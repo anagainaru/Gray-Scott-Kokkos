@@ -217,16 +217,13 @@ void InitializeGSData(const Kokkos::View<double ***, MemSpace> &u,
     auto const max_y = std::min(settings.L / 2 + d, simComm.offset_y + simComm.size_y + 1);
     auto const min_z = std::max(settings.L / 2 - d, simComm.offset_z);
     auto const max_z = std::min(settings.L / 2 + d, simComm.offset_z + simComm.size_z + 1);
-    Kokkos::parallel_for("init_buffers", Kokkos::RangePolicy<>(min_x, max_x), KOKKOS_LAMBDA(int x) {
-        for (int y = min_y; y < max_y; y++)
-        {
-            for (int z = min_z; z < max_z; z++)
-            {
-                u(x - ox, y - oy, z - oz) = 0.25;
-                v(x - ox, y - oy, z - oz) = 0.33;
-            }
-        }
-    });
+    Kokkos::parallel_for(
+        "init_buffers",
+        Kokkos::MDRangePolicy<Kokkos::Rank<3>>({min_x, min_y, min_z}, {max_x, max_y, max_z}),
+        KOKKOS_LAMBDA(int x, int y, int z) {
+            u(x - ox, y - oy, z - oz) = 0.25;
+            v(x - ox, y - oy, z - oz) = 0.33;
+        });
 };
 
 template <class MemSpace>
@@ -243,47 +240,43 @@ void ComputeNextIteration(Kokkos::View<double ***, MemSpace> &u,
     auto const noise = settings.noise;
     size_t const sx = simComm.size_x, sy = simComm.size_y, sz = simComm.size_z;
     auto const random_pool = simComm.rand_pool;
-    Kokkos::parallel_for("calc_gray_scott", Kokkos::RangePolicy<>(1, sx + 1), KOKKOS_LAMBDA(int x) {
-        GSComm::RandomPool::generator_type generator = random_pool.get_state();
-        double ts;
-        for (int y = 1; y < static_cast<int>(sy) + 1; y++)
-        {
-            for (int z = 1; z < static_cast<int>(sz) + 1; z++)
-            {
-                double du, dv;
-                // laplacian for u
-                ts = 0;
-                ts += u(x - 1, y, z);
-                ts += u(x + 1, y, z);
-                ts += u(x, y - 1, z);
-                ts += u(x, y + 1, z);
-                ts += u(x, y, z - 1);
-                ts += u(x, y, z + 1);
-                ts += -6.0 * u(x, y, z);
-                ts /= 6.0;
-                du = Du * ts;
+    Kokkos::parallel_for(
+        "calc_gray_scott",
+        Kokkos::MDRangePolicy<Kokkos::Rank<3>>({1, 1, 1}, {sx + 1, sy + 1, sz + 1}),
+        KOKKOS_LAMBDA(int x, int y, int z) {
+            GSComm::RandomPool::generator_type generator = random_pool.get_state();
+            double du, dv;
+            // laplacian for u
+            double ts = 0;
+            ts += u(x - 1, y, z);
+            ts += u(x + 1, y, z);
+            ts += u(x, y - 1, z);
+            ts += u(x, y + 1, z);
+            ts += u(x, y, z - 1);
+            ts += u(x, y, z + 1);
+            ts += -6.0 * u(x, y, z);
+            ts /= 6.0;
+            du = Du * ts;
 
-                // laplacian for v
-                ts = 0;
-                ts += v(x - 1, y, z);
-                ts += v(x + 1, y, z);
-                ts += v(x, y - 1, z);
-                ts += v(x, y + 1, z);
-                ts += v(x, y, z - 1);
-                ts += v(x, y, z + 1);
-                ts += -6.0 * v(x, y, z);
-                ts /= 6.0;
-                dv = Dv * ts;
+            // laplacian for v
+            ts = 0;
+            ts += v(x - 1, y, z);
+            ts += v(x + 1, y, z);
+            ts += v(x, y - 1, z);
+            ts += v(x, y + 1, z);
+            ts += v(x, y, z - 1);
+            ts += v(x, y, z + 1);
+            ts += -6.0 * v(x, y, z);
+            ts /= 6.0;
+            dv = Dv * ts;
 
-                du += (-u(x, y, z) * v(x, y, z) * v(x, y, z) + F * (1.0 - u(x, y, z)));
-                dv += (u(x, y, z) * v(x, y, z) * v(x, y, z) - (F + k) * v(x, y, z));
-                du += noise * generator.frand(-1.f, 1.f);
-                u2(x, y, z) = u(x, y, z) + du * dt;
-                v2(x, y, z) = v(x, y, z) + dv * dt;
-            }
-        }
-        random_pool.free_state(generator);
-    });
+            du += (-u(x, y, z) * v(x, y, z) * v(x, y, z) + F * (1.0 - u(x, y, z)));
+            dv += (u(x, y, z) * v(x, y, z) * v(x, y, z) - (F + k) * v(x, y, z));
+            du += noise * generator.frand(-1.f, 1.f);
+            u2(x, y, z) = u(x, y, z) + du * dt;
+            v2(x, y, z) = v(x, y, z) + dv * dt;
+            random_pool.free_state(generator);
+        });
     std::swap(u, u2);
     std::swap(v, v2);
 };
