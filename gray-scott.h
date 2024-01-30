@@ -15,13 +15,21 @@
 template <class MemSpace>
 struct PlaneBuffer
 {
-    Kokkos::View<double **, Kokkos::HostSpace> firstPlaneGhost;
-    Kokkos::View<double **, Kokkos::HostSpace> lastPlaneGhost;
+    Kokkos::View<double **, MemSpace> firstPlaneGhost;
+    Kokkos::View<double **, MemSpace> lastPlaneGhost;
     Kokkos::View<double **, MemSpace> firstPlaneData;
     Kokkos::View<double **, MemSpace> lastPlaneData;
     PlaneBuffer(size_t x, size_t y)
     : firstPlaneGhost("firstGhostPlane", x, y), lastPlaneGhost("lastGhostPlane", x, y),
       firstPlaneData("firstDataPlane", x, y), lastPlaneData("lastDataPlane", x, y){};
+};
+
+template <class MemSpace>
+struct MPIPlaneBuffers
+{
+    PlaneBuffer<MemSpace> gpuBuffers;
+    PlaneBuffer<Kokkos::HostSpace> cpuBuffers;
+    MPIPlaneBuffers(size_t x, size_t y) : gpuBuffers(x, y), cpuBuffers(x, y){};
 };
 
 template <class MemSpace>
@@ -31,9 +39,9 @@ struct SimData
     Kokkos::View<double ***, MemSpace> v;
     Kokkos::View<double ***, MemSpace> u2;
     Kokkos::View<double ***, MemSpace> v2;
-    PlaneBuffer<MemSpace> mpiBufferXY;
-    PlaneBuffer<MemSpace> mpiBufferXZ;
-    PlaneBuffer<MemSpace> mpiBufferYZ;
+    MPIPlaneBuffers<MemSpace> mpiBufferXY;
+    MPIPlaneBuffers<MemSpace> mpiBufferXZ;
+    MPIPlaneBuffers<MemSpace> mpiBufferYZ;
     SimData(size_t x, size_t y, size_t z)
     : u("U", x + 2, y + 2, z + 2), v("V", x + 2, y + 2, z + 2), u2("BackupU", x + 2, y + 2, z + 2),
       v2("BackupV", x + 2, y + 2, z + 2), mpiBufferXY(x + 2, y + 2), mpiBufferXZ(x + 2, z + 2),
@@ -109,98 +117,112 @@ public:
 
     // Exchange XY faces with north/south
     template <class MemSpace>
-    void ExchangeXY(Kokkos::View<double ***, MemSpace> localData, PlaneBuffer<MemSpace> borders) const
+    void ExchangeXY(Kokkos::View<double ***, MemSpace> localData,
+                    MPIPlaneBuffers<MemSpace> borders) const
     {
         int sx = size_x + 2;
         int sy = size_y + 2;
         // copy the first and last xy surface to a CPU structure
-        Kokkos::deep_copy(borders.firstPlaneData, Kokkos::subview(localData, Kokkos::ALL, Kokkos::ALL, 1));
-        Kokkos::deep_copy(borders.lastPlaneData, Kokkos::subview(localData, Kokkos::ALL, Kokkos::ALL, size_z));
-        auto tempFirstData =
-            Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, borders.firstPlaneData);
-        auto tempLastData =
-            Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, borders.lastPlaneData);
+        Kokkos::deep_copy(borders.gpuBuffers.firstPlaneData,
+                          Kokkos::subview(localData, Kokkos::ALL, Kokkos::ALL, 1));
+        Kokkos::deep_copy(borders.gpuBuffers.lastPlaneData,
+                          Kokkos::subview(localData, Kokkos::ALL, Kokkos::ALL, size_z));
+        borders.cpuBuffers.firstPlaneData = Kokkos::create_mirror_view_and_copy(
+            Kokkos::HostSpace{}, borders.gpuBuffers.firstPlaneData);
+        borders.cpuBuffers.lastPlaneData = Kokkos::create_mirror_view_and_copy(
+            Kokkos::HostSpace{}, borders.gpuBuffers.lastPlaneData);
         MPI_Status st;
 
         // Send XY face z=size_z to north and receive z=0 from south
-        MPI_Sendrecv(tempLastData.data(), sx * sy, MPI_DOUBLE, north, 1, borders.firstPlaneGhost.data(), sx * sy,
-                     MPI_DOUBLE, south, 1, cart_comm, &st);
+        MPI_Sendrecv(borders.cpuBuffers.lastPlaneData.data(), sx * sy, MPI_DOUBLE, north, 1,
+                     borders.cpuBuffers.firstPlaneGhost.data(), sx * sy, MPI_DOUBLE, south, 1,
+                     cart_comm, &st);
         // Send XY face z=1 to south and receive z=size_z+1 from north
-        MPI_Sendrecv(tempFirstData.data(), sx * sy, MPI_DOUBLE, south, 1, borders.lastPlaneGhost.data(), sx * sy,
-                     MPI_DOUBLE, north, 1, cart_comm, &st);
+        MPI_Sendrecv(borders.cpuBuffers.firstPlaneData.data(), sx * sy, MPI_DOUBLE, south, 1,
+                     borders.cpuBuffers.lastPlaneGhost.data(), sx * sy, MPI_DOUBLE, north, 1,
+                     cart_comm, &st);
 
         // copy back to the local data the exchanged values
-        auto tempFirstGhost =
-            Kokkos::create_mirror_view_and_copy(Kokkos::DefaultExecutionSpace::memory_space{}, borders.firstPlaneGhost);
-        Kokkos::deep_copy(Kokkos::subview(localData, Kokkos::ALL, Kokkos::ALL, 0), tempFirstGhost);
-        auto tempLastGhost =
-            Kokkos::create_mirror_view_and_copy(Kokkos::DefaultExecutionSpace::memory_space{}, borders.lastPlaneGhost);
+        borders.gpuBuffers.firstPlaneGhost = Kokkos::create_mirror_view_and_copy(
+            Kokkos::DefaultExecutionSpace::memory_space{}, borders.cpuBuffers.firstPlaneGhost);
+        Kokkos::deep_copy(Kokkos::subview(localData, Kokkos::ALL, Kokkos::ALL, 0),
+                          borders.gpuBuffers.firstPlaneGhost);
+        borders.gpuBuffers.lastPlaneGhost = Kokkos::create_mirror_view_and_copy(
+            Kokkos::DefaultExecutionSpace::memory_space{}, borders.cpuBuffers.lastPlaneGhost);
         Kokkos::deep_copy(Kokkos::subview(localData, Kokkos::ALL, Kokkos::ALL, size_z + 1),
-                          tempLastGhost);
+                          borders.gpuBuffers.lastPlaneGhost);
     };
 
     // Exchange XZ faces with up/down
     template <class MemSpace>
-    void ExchangeXZ(Kokkos::View<double ***, MemSpace> localData, PlaneBuffer<MemSpace> borders) const
+    void ExchangeXZ(Kokkos::View<double ***, MemSpace> localData,
+                    MPIPlaneBuffers<MemSpace> borders) const
     {
         int sx = size_x + 2;
         int sz = size_z + 2;
-        // copy the first and last xy surface to a CPU structure
-        Kokkos::deep_copy(borders.firstPlaneData, Kokkos::subview(localData, Kokkos::ALL, 1, Kokkos::ALL));
-        Kokkos::deep_copy(borders.lastPlaneData, Kokkos::subview(localData, Kokkos::ALL, size_y, Kokkos::ALL));
-        auto tempFirstData =
-            Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, borders.firstPlaneData);
-        auto tempLastData =
-            Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, borders.lastPlaneData);
+        // copy the first and last xz surface to a CPU structure
+        Kokkos::deep_copy(borders.gpuBuffers.firstPlaneData,
+                          Kokkos::subview(localData, Kokkos::ALL, 1, Kokkos::ALL));
+        Kokkos::deep_copy(borders.gpuBuffers.lastPlaneData,
+                          Kokkos::subview(localData, Kokkos::ALL, size_y, Kokkos::ALL));
+        borders.cpuBuffers.firstPlaneData = Kokkos::create_mirror_view_and_copy(
+            Kokkos::HostSpace{}, borders.gpuBuffers.firstPlaneData);
+        borders.cpuBuffers.lastPlaneData = Kokkos::create_mirror_view_and_copy(
+            Kokkos::HostSpace{}, borders.gpuBuffers.lastPlaneData);
         MPI_Status st;
 
         // Send XZ face y=size_y to up and receive y=0 from down
-        MPI_Sendrecv(tempLastData.data(), sx * sz, MPI_DOUBLE, up, 1, borders.firstPlaneGhost.data(), sx * sz,
-                     MPI_DOUBLE, down, 1, cart_comm, &st);
+        MPI_Sendrecv(borders.cpuBuffers.lastPlaneData.data(), sx * sz, MPI_DOUBLE, up, 1,
+                     borders.cpuBuffers.firstPlaneGhost.data(), sx * sz, MPI_DOUBLE, down, 1, cart_comm, &st);
         // Send XZ face y=1 to down and receive y=size_y+1 from up
-        MPI_Sendrecv(tempFirstData.data(), sx * sz, MPI_DOUBLE, down, 1, borders.lastPlaneGhost.data(), sx * sz,
-                     MPI_DOUBLE, up, 1, cart_comm, &st);
+        MPI_Sendrecv(borders.cpuBuffers.firstPlaneData.data(), sx * sz, MPI_DOUBLE, down, 1,
+                     borders.cpuBuffers.lastPlaneGhost.data(), sx * sz, MPI_DOUBLE, up, 1, cart_comm, &st);
 
         // copy back to the local data the exchanged values
-        auto tempFirstGhost =
-            Kokkos::create_mirror_view_and_copy(Kokkos::DefaultExecutionSpace::memory_space{}, borders.firstPlaneGhost);
-        Kokkos::deep_copy(Kokkos::subview(localData, Kokkos::ALL, 0, Kokkos::ALL), tempFirstGhost);
-        auto tempLastGhost =
-            Kokkos::create_mirror_view_and_copy(Kokkos::DefaultExecutionSpace::memory_space{}, borders.lastPlaneGhost);
+        borders.gpuBuffers.firstPlaneGhost = Kokkos::create_mirror_view_and_copy(
+            Kokkos::DefaultExecutionSpace::memory_space{}, borders.cpuBuffers.firstPlaneGhost);
+        Kokkos::deep_copy(Kokkos::subview(localData, Kokkos::ALL, 0, Kokkos::ALL),
+                          borders.gpuBuffers.firstPlaneGhost);
+        borders.gpuBuffers.lastPlaneGhost = Kokkos::create_mirror_view_and_copy(
+            Kokkos::DefaultExecutionSpace::memory_space{}, borders.cpuBuffers.lastPlaneGhost);
         Kokkos::deep_copy(Kokkos::subview(localData, Kokkos::ALL, size_y + 1, Kokkos::ALL),
-                          tempLastGhost);
+                          borders.gpuBuffers.lastPlaneGhost);
     };
 
     // Exchange YZ faces with west/east
     template <class MemSpace>
-    void ExchangeYZ(Kokkos::View<double ***, MemSpace> localData, PlaneBuffer<MemSpace> borders) const
+    void ExchangeYZ(Kokkos::View<double ***, MemSpace> localData,
+                    MPIPlaneBuffers<MemSpace> borders) const
     {
         int sy = size_y + 2;
         int sz = size_z + 2;
-        // copy the first and last xy surface to a CPU structure
-        Kokkos::deep_copy(borders.firstPlaneData, Kokkos::subview(localData, 1, Kokkos::ALL, Kokkos::ALL));
-        Kokkos::deep_copy(borders.lastPlaneData, Kokkos::subview(localData, size_x, Kokkos::ALL, Kokkos::ALL));
-        auto tempFirstData =
-            Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, borders.firstPlaneData);
-        auto tempLastData =
-            Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace{}, borders.lastPlaneData);
+        // copy the first and last yz surface to a CPU structure
+        Kokkos::deep_copy(borders.gpuBuffers.firstPlaneData,
+                          Kokkos::subview(localData, 1, Kokkos::ALL, Kokkos::ALL));
+        Kokkos::deep_copy(borders.gpuBuffers.lastPlaneData,
+                          Kokkos::subview(localData, size_x, Kokkos::ALL, Kokkos::ALL));
+        borders.cpuBuffers.firstPlaneData = Kokkos::create_mirror_view_and_copy(
+            Kokkos::HostSpace{}, borders.gpuBuffers.firstPlaneData);
+        borders.cpuBuffers.lastPlaneData = Kokkos::create_mirror_view_and_copy(
+            Kokkos::HostSpace{}, borders.gpuBuffers.lastPlaneData);
         MPI_Status st;
 
-        // Send XZ face y=size_y to up and receive y=0 from down
-        MPI_Sendrecv(tempLastData.data(), sy * sz, MPI_DOUBLE, east, 1, borders.firstPlaneGhost.data(), sy * sz,
-                     MPI_DOUBLE, west, 1, cart_comm, &st);
-        // Send XZ face y=1 to down and receive y=size_y+1 from up
-        MPI_Sendrecv(tempFirstData.data(), sy * sz, MPI_DOUBLE, west, 1, borders.lastPlaneGhost.data(), sy * sz,
-                     MPI_DOUBLE, east, 1, cart_comm, &st);
+        // Send YZ face y=size_y to up and receive y=0 from down
+        MPI_Sendrecv(borders.cpuBuffers.lastPlaneData.data(), sy * sz, MPI_DOUBLE, east, 1,
+                     borders.cpuBuffers.firstPlaneGhost.data(), sy * sz, MPI_DOUBLE, west, 1, cart_comm, &st);
+        // Send YZ face y=1 to down and receive y=size_y+1 from up
+        MPI_Sendrecv(borders.cpuBuffers.firstPlaneData.data(), sy * sz, MPI_DOUBLE, west, 1,
+                     borders.cpuBuffers.lastPlaneGhost.data(), sy * sz, MPI_DOUBLE, east, 1, cart_comm, &st);
 
         // copy back to the local data the exchanged values
-        auto tempFirstGhost =
-            Kokkos::create_mirror_view_and_copy(Kokkos::DefaultExecutionSpace::memory_space{}, borders.firstPlaneGhost);
-        Kokkos::deep_copy(Kokkos::subview(localData, 0, Kokkos::ALL, Kokkos::ALL), tempFirstGhost);
-        auto tempLastGhost =
-            Kokkos::create_mirror_view_and_copy(Kokkos::DefaultExecutionSpace::memory_space{}, borders.lastPlaneGhost);
+        borders.gpuBuffers.firstPlaneGhost = Kokkos::create_mirror_view_and_copy(
+            Kokkos::DefaultExecutionSpace::memory_space{}, borders.cpuBuffers.firstPlaneGhost);
+        Kokkos::deep_copy(Kokkos::subview(localData, 0, Kokkos::ALL, Kokkos::ALL),
+                          borders.gpuBuffers.firstPlaneGhost);
+        borders.gpuBuffers.lastPlaneGhost = Kokkos::create_mirror_view_and_copy(
+            Kokkos::DefaultExecutionSpace::memory_space{}, borders.cpuBuffers.lastPlaneGhost);
         Kokkos::deep_copy(Kokkos::subview(localData, size_x + 1, Kokkos::ALL, Kokkos::ALL),
-                          tempLastGhost);
+                          borders.gpuBuffers.lastPlaneGhost);
     };
 };
 
