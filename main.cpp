@@ -83,26 +83,22 @@ int main(int argc, char **argv)
 
     Kokkos::initialize(argc, argv);
     {
+        using MemSpace = Kokkos::DefaultExecutionSpace::memory_space;
+
         Settings settings = Settings::from_json(argv[1]);
 
         GSComm simComm(settings, comm);
+        SimData<MemSpace> simData(simComm.size_x, simComm.size_y, simComm.size_z);
+        InitializeGSData<MemSpace>(simData.u, simData.v, settings, simComm);
 
         adios2::ADIOS adios(settings.adios_config, comm);
         adios2::IO io_main = adios.DeclareIO("SimulationOutput");
         adios2::IO io_ckpt = adios.DeclareIO("SimulationCheckpoint");
 
-        using memSpace = Kokkos::DefaultExecutionSpace::memory_space;
-        Kokkos::View<double ***, memSpace> u("U", simComm.size_x + 2, simComm.size_y + 2,
-                                             simComm.size_z + 2);
-        Kokkos::deep_copy(u, 1.0);
-        Kokkos::View<double ***, memSpace> v("V", simComm.size_x + 2, simComm.size_y + 2,
-                                             simComm.size_z + 2);
-        InitializeGSData<memSpace>(u, v, settings, simComm);
-
         int restart_step = 0;
         if (settings.restart)
         {
-            restart_step = ReadRestart(comm, settings, simComm, io_ckpt, u, v);
+            restart_step = ReadRestart(comm, settings, simComm, io_ckpt, simData.u, simData.v);
             io_main.SetParameter("AppendAfterSteps",
                                  std::to_string(restart_step / settings.plotgap));
         }
@@ -131,11 +127,6 @@ int main(int argc, char **argv)
         log << "step\ttotal_gs\tcompute_gs\twrite_gs" << std::endl;
 #endif
 
-        Kokkos::View<double ***, memSpace> u2("BackupU", simComm.size_x + 2, simComm.size_y + 2,
-                                              simComm.size_z + 2);
-        Kokkos::deep_copy(u2, 1.0);
-        Kokkos::View<double ***, memSpace> v2("BackupV", simComm.size_x + 2, simComm.size_y + 2,
-                                              simComm.size_z + 2);
         for (int it = restart_step; it < settings.steps;)
         {
 #ifdef ENABLE_TIMERS
@@ -144,7 +135,7 @@ int main(int argc, char **argv)
             timer_compute.start();
 #endif
 
-            IterateGS<memSpace>(u, v, u2, v2, settings, simComm);
+            IterateGS<MemSpace>(simData, settings, simComm);
             it++;
 
 #ifdef ENABLE_TIMERS
@@ -161,12 +152,12 @@ int main(int argc, char **argv)
                               << it / settings.plotgap << std::endl;
                 }
 
-                writer_main.write(it, simComm, u, v);
+                writer_main.write(it, simComm, simData.u, simData.v);
             }
 
             if (settings.checkpoint && (it % settings.checkpoint_freq) == 0)
             {
-                WriteCkpt(comm, it, settings, simComm, io_ckpt, u, v);
+                WriteCkpt(comm, it, settings, simComm, io_ckpt, simData.u, simData.v);
             }
 
 #ifdef ENABLE_TIMERS
